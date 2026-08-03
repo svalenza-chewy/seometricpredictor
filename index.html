@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SEO Metric Predictor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Sans+3:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css?v=20260412-1" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">SEO planning workspace</p>
+          <h1>SEO Metric Predictor</h1>
+          <p class="hero-copy">
+            Model how share-of-voice improvements translate into traffic over the
+            next 12 months for the page types your team is optimizing.
+          </p>
+        </div>
+        <div class="hero-card">
+          <p class="hero-card-label">Data source</p>
+          <strong id="datasetName">Conductor live connection</strong>
+          <p id="datasetSummary">Waiting for account data</p>
+        </div>
+      </header>
+
+      <aside id="statusBanner" class="status-banner" data-state="info">
+        Enter your Conductor credentials to connect.
+      </aside>
+
+      <main class="layout">
+        <section class="panel controls-panel">
+          <div class="panel-header">
+            <h2>Inputs</h2>
+            <p>Choose live Conductor data and configure the forecast.</p>
+          </div>
+
+          <section class="connection-panel">
+            <div class="panel-header compact">
+              <h3>Conductor Connection</h3>
+              <p>Credentials stay in this local session only and are not stored in the app.</p>
+            </div>
+            <div class="field-grid connection-grid">
+              <label class="field">
+                <span>API key</span>
+                <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+
+              <label class="field">
+                <span>Secret API key</span>
+                <input id="apiSecretInput" type="password" autocomplete="off" spellcheck="false" />
+              </label>
+            </div>
+            <button id="connectButton" type="button" class="action-button connect-button">Connect to Conductor</button>
+          </section>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Account</span>
+              <select id="accountSelect"></select>
+            </label>
+
+            <label class="field">
+              <span>Web property</span>
+              <select id="webPropertySelect"></select>
+            </label>
+
+            <label class="field">
+              <span>Keyword group</span>
+              <select id="keywordGroupSelect"></select>
+            </label>
+          </div>
+
+          <div class="field-grid">
+
+            <label class="field">
+              <span>Deployment month</span>
+              <select id="monthSelect"></select>
+            </label>
+
+            <label class="field">
+              <span>Deployment year</span>
+              <select id="yearSelect"></select>
+            </label>
+          </div>
+
+          <fieldset class="field">
+            <legend>Page Type For KPI Modeling</legend>
+            <div id="pageTypes" class="checkbox-grid"></div>
+          </fieldset>
+
+          <section class="assumptions">
+            <div class="panel-header compact">
+              <h3>Improvement assumptions</h3>
+              <p>Adjust the first-year lift by metric.</p>
+            </div>
+            <div id="metricInputs" class="metric-inputs"></div>
+          </section>
+        </section>
+
+        <section class="results-column">
+          <section class="panel summary-panel">
+            <div class="panel-header">
+              <h2>Forecast summary</h2>
+              <p>Snapshot of the selected group and blended page-type impact.</p>
+            </div>
+            <div class="summary-grid">
+              <article>
+                <span>Annual search volume</span>
+                <strong id="annualSearchVolume">0</strong>
+              </article>
+              <article>
+                <span>Current Chewy market share</span>
+                <strong id="currentShare">0%</strong>
+                <p id="shareStatus" class="small-note"></p>
+              </article>
+              <article>
+                <span>Projected market share after 12 months</span>
+                <strong id="projectedShare">0%</strong>
+              </article>
+              <article>
+                <span>Estimated annual traffic opportunity</span>
+                <strong id="projectedTraffic">0</strong>
+                <p class="small-note">Uses your override if entered; otherwise uses the modeled calculation.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel table-panel">
+            <div class="panel-header">
+              <h2>Monthly metric forecast</h2>
+              <p>
+                Each row shows the baseline, monthly lift, and 12-month ending
+                point.
+              </p>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead id="forecastHead"></thead>
+                <tbody id="forecastBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+
+      <section class="panel board-panel">
+        <div class="panel-header">
+          <h2>Project Catalog + Roadmap</h2>
+          <p>Save forecasted projects, catalog them by page type, and slot the same cards into quarterly roadmap columns.</p>
+        </div>
+        <div class="board-stack">
+          <div class="board-layout">
+            <section class="outcome-tray">
+              <div class="tray-header">
+                <div>
+                  <h3>Project Tray</h3>
+                  <p class="small-note">Save the active forecast as a draggable project card.</p>
+                </div>
+                <div class="tray-actions">
+                  <button id="saveOutcomeButton" type="button" class="action-button">Add Current Outcome</button>
+                  <button id="exportOutcomesButton" type="button" class="action-button secondary">Export Outcomes</button>
+                </div>
+              </div>
+              <div id="currentOutcomeCard" class="current-outcome"></div>
+              <div id="outcomeTray" class="outcome-cards"></div>
+            </section>
+            <section>
+              <div class="tray-header">
+                <div>
+                  <h3>Catalog By Page Type</h3>
+                  <p class="small-note">Drag saved projects into a page-type group without affecting their roadmap placement.</p>
+                </div>
+              </div>
+              <div id="groupBoard" class="group-board"></div>
+            </section>
+          </div>
+          <section class="roadmap-section">
+            <div class="tray-header roadmap-header">
+              <div>
+                <h3>Roadmap Builder</h3>
+                <p class="small-note">Drag project cards into the quarter you want to launch them in. Metrics roll up at the quarter level.</p>
+              </div>
+            </div>
+            <div id="roadmapBoard" class="roadmap-board"></div>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./app.js?v=20260412-1"></script>
+  </body>
+</html>
