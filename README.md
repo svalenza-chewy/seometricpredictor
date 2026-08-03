@@ -31,6 +31,16 @@ window.SEOMETRIC_APP_CONFIG = {
 
 Once `apiBaseUrl` is set, users on the public site can enter their own Conductor API key and secret API key and the frontend will send those values to the hosted backend for the Conductor calls.
 
+### One-click backend option
+
+This repo now includes a Render Blueprint in `render.yaml` for the Conductor API backend.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/svalenza-chewy/seometricpredictor)
+
+If the Render service is created with the default Blueprint name `svalenza-seometricpredictor-api`, the public frontend is already configured to call:
+
+`https://svalenza-seometricpredictor-api.onrender.com`
+
 ## Files included
 
 - `index.html`

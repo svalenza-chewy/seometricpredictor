@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: svalenza-seometricpredictor-api
+    runtime: python
+    plan: free
+    region: oregon
+    autoDeployTrigger: commit
+    buildCommand: python3 -m py_compile server.py
+    startCommand: python3 server.py
+    healthCheckPath: /api/page-type-metrics
+    envVars:
+      - key: HOST
+        value: 0.0.0.0

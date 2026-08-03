@@ -563,11 +563,16 @@ function setStatus(message, isError = false) {
   elements.statusBanner.dataset.state = isError ? "error" : "info";
 }
 
+function canUseHostedApi() {
+  return Boolean(state.hostedPreviewMode && API_BASE_URL);
+}
+
 function renderConnectionState() {
-  elements.connectButton.disabled = state.connecting || state.previewMode;
+  const connectionLocked = state.previewMode && !canUseHostedApi();
+  elements.connectButton.disabled = state.connecting || connectionLocked;
   elements.connectButton.textContent = state.connecting
     ? "Connecting..."
-    : state.previewMode
+    : connectionLocked
       ? state.hostedPreviewMode
         ? "Public Benchmark Mode"
         : "Preview Mode Only"
@@ -575,8 +580,8 @@ function renderConnectionState() {
       ? "Reconnect to Conductor"
       : "Connect to Conductor";
 
-  elements.apiKeyInput.disabled = state.previewMode;
-  elements.apiSecretInput.disabled = state.previewMode;
+  elements.apiKeyInput.disabled = connectionLocked;
+  elements.apiSecretInput.disabled = connectionLocked;
 
   const controlsDisabled = !state.isConnected;
   elements.accountSelect.disabled = controlsDisabled;
@@ -996,7 +1001,7 @@ async function loadAccounts() {
 }
 
 async function connectToConductor() {
-  if (state.previewMode) {
+  if (state.previewMode && !canUseHostedApi()) {
     setStatus(
       state.hostedPreviewMode
         ? API_BASE_URL
