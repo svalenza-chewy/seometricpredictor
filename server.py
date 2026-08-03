@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 APP_HOST = os.environ.get("HOST", "127.0.0.1")
 APP_PORT = int(os.environ.get("PORT", "8000"))
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "*")
 REPORTING_API_BASE = "https://api.conductor.com"
 DATA_API_BASE = "https://api-universal.conductor.com"
 DEFAULT_SEARCH_ENGINE = "GOOGLE_en_US"
@@ -323,6 +324,9 @@ def get_client_or_throw() -> ConductorClient:
 
 class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
+        self.send_header("Access-Control-Allow-Origin", CORS_ALLOW_ORIGIN)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
@@ -378,6 +382,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         self.send_text(404, "Not found")
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
 
     def do_GET(self):
         try:

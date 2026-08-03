@@ -8,9 +8,28 @@ The GitHub Pages version is intended for team sharing and runs in benchmark/manu
 
 - bundled page-type benchmark data is available in the browser
 - roadmap builder, cataloging, forecasting, exports, and manual overrides work
-- live Conductor connection does not run on GitHub Pages because it requires a local backend session
+- live Conductor connection does not run on GitHub Pages by itself because GitHub Pages is static-only
+- live Conductor connection can run from the public site when you point it at a separately hosted backend API
 
-For live Conductor credentials and API access, use the local backend below.
+For live Conductor credentials and API access, use the local backend below or host `server.py` / `server.mjs` on a backend service.
+
+### Public site + hosted backend
+
+The public frontend now supports a separate API host:
+
+1. Host `server.py` or `server.mjs` on a server that can reach Conductor.
+2. Set `CORS_ALLOW_ORIGIN` on that backend to your public site origin.
+3. Edit `public-config.js` and set:
+
+```js
+window.SEOMETRIC_APP_CONFIG = {
+  apiBaseUrl: "https://your-backend.example.com",
+};
+```
+
+4. Deploy the static files to GitHub Pages.
+
+Once `apiBaseUrl` is set, users on the public site can enter their own Conductor API key and secret API key and the frontend will send those values to the hosted backend for the Conductor calls.
 
 ## Files included
 

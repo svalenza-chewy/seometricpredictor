@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 
 const APP_HOST = process.env.HOST || "127.0.0.1";
 const APP_PORT = Number(process.env.PORT || "8000");
+const CORS_ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN || "*";
 const REPORTING_API_BASE = "https://api.conductor.com";
 const DATA_API_BASE = "https://api-universal.conductor.com";
 const DEFAULT_SEARCH_ENGINE = "GOOGLE_en_US";
@@ -364,6 +365,9 @@ function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
+    "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
+    "Access-Control-Allow-Headers": "Content-Type",
   });
   response.end(body);
 }
@@ -372,6 +376,9 @@ function sendText(response, statusCode, body) {
   response.writeHead(statusCode, {
     "Content-Type": "text/plain; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
+    "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
+    "Access-Control-Allow-Headers": "Content-Type",
   });
   response.end(body);
 }
@@ -381,6 +388,9 @@ async function serveStatic(response, filename, contentType, sendBody = true) {
   response.writeHead(200, {
     "Content-Type": contentType,
     "Content-Length": body.length,
+    "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
+    "Access-Control-Allow-Headers": "Content-Type",
     "Cache-Control": "no-store, no-cache, must-revalidate",
     Pragma: "no-cache",
     Expires: "0",
@@ -423,6 +433,16 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
   try {
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, {
+        "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
+        "Access-Control-Allow-Headers": "Content-Type",
+      });
+      response.end();
+      return;
+    }
+
     if (request.method === "HEAD") {
       if (url.pathname === "/") return await serveStatic(response, "index.html", "text/html; charset=utf-8", false);
       if (url.pathname === "/app.js") return await serveStatic(response, "app.js", "application/javascript; charset=utf-8", false);

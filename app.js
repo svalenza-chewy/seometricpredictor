@@ -31,6 +31,25 @@ const KPI_LABELS = {
   "Click through rate": "Click Through Rate",
 };
 
+function normalizeApiBaseUrl(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+function resolveApiBaseUrl() {
+  if (["127.0.0.1", "localhost"].includes(window.location.hostname)) {
+    return "";
+  }
+
+  const searchParams = new URLSearchParams(window.location.search);
+  const queryValue = searchParams.get("apiBaseUrl");
+  const configValue = window.SEOMETRIC_APP_CONFIG?.apiBaseUrl;
+  return normalizeApiBaseUrl(queryValue || configValue || "");
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+
 function buildRoadmapQuarters(count = DEFAULT_ROADMAP_QUARTER_COUNT, startDate = new Date()) {
   return Array.from({ length: count }, (_, index) => {
     const start = new Date(startDate.getFullYear(), startDate.getMonth() + index * 3, 1);
@@ -194,6 +213,16 @@ function formatMetricValue(value, unit) {
 
 function isLocalHost() {
   return ["127.0.0.1", "localhost"].includes(window.location.hostname);
+}
+
+function buildApiUrl(path) {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (!API_BASE_URL) {
+    return path;
+  }
+  return new URL(path.replace(/^\//, ""), `${API_BASE_URL}/`).toString();
 }
 
 function slugify(value) {
@@ -490,9 +519,13 @@ function assignOutcomeToRoadmapQuarter(payload, weekIndex, laneId) {
 async function fetchJson(url) {
   let response;
   try {
-    response = await fetch(url);
+    response = await fetch(buildApiUrl(url));
   } catch (error) {
-    throw new Error("Could not reach the local predictor server. Start `python3 server.py` and open http://127.0.0.1:8000.");
+    throw new Error(
+      API_BASE_URL
+        ? `Could not reach the hosted predictor API at ${API_BASE_URL}.`
+        : "Could not reach the local predictor server. Start `python3 server.py` and open http://127.0.0.1:8000.",
+    );
   }
   if (!response.ok) {
     const message = await response.text();
@@ -504,7 +537,7 @@ async function fetchJson(url) {
 async function postJson(url, payload) {
   let response;
   try {
-    response = await fetch(url, {
+    response = await fetch(buildApiUrl(url), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -512,7 +545,11 @@ async function postJson(url, payload) {
       body: JSON.stringify(payload),
     });
   } catch (error) {
-    throw new Error("Could not reach the local predictor server. Start `python3 server.py` and open http://127.0.0.1:8000.");
+    throw new Error(
+      API_BASE_URL
+        ? `Could not reach the hosted predictor API at ${API_BASE_URL}.`
+        : "Could not reach the local predictor server. Start `python3 server.py` and open http://127.0.0.1:8000.",
+    );
   }
   if (!response.ok) {
     const message = await response.text();
@@ -551,7 +588,9 @@ function renderConnectionState() {
       ? "Bundled benchmark data"
       : "Connection needed";
     elements.datasetSummary.textContent = state.hostedPreviewMode
-      ? "This public version uses built-in page-type benchmarks plus your manual inputs."
+      ? API_BASE_URL
+        ? "Connect with your own Conductor API key and secret API key through the hosted backend."
+        : "This public version uses built-in page-type benchmarks plus your manual inputs."
       : "Enter your Conductor API key and secret API key to load live accounts.";
   }
 }
@@ -960,7 +999,9 @@ async function connectToConductor() {
   if (state.previewMode) {
     setStatus(
       state.hostedPreviewMode
-        ? "This public version runs in benchmark mode only. Use the local app with `python3 server.py` for live Conductor access."
+        ? API_BASE_URL
+          ? `The public site is configured for API access at ${API_BASE_URL}, but the benchmark fallback is still active.`
+          : "This public version runs in benchmark mode only until a hosted API backend is configured in `public-config.js`."
         : "Preview mode is using bundled benchmark data. Live Conductor connection is unavailable on this preview server.",
     );
     return;
@@ -1014,7 +1055,9 @@ async function loadPageTypes() {
     state.hostedPreviewMode = !isLocalHost();
     setStatus(
       state.hostedPreviewMode
-        ? "Public benchmark mode loaded with bundled page-type data."
+        ? API_BASE_URL
+          ? `Could not load benchmark data from the hosted API at ${API_BASE_URL}. Falling back to bundled benchmark mode.`
+          : "Public benchmark mode loaded with bundled page-type data."
         : "Running in local preview mode with bundled benchmark data.",
     );
   }
@@ -1768,7 +1811,9 @@ async function boot() {
       state.hostedPreviewMode = !isLocalHost();
       setStatus(
         state.hostedPreviewMode
-          ? "Public benchmark mode is active. Live Conductor connection is available only in the local app."
+          ? API_BASE_URL
+            ? `The public site could not reach the hosted API at ${API_BASE_URL}. Benchmark mode is active instead.`
+            : "Public benchmark mode is active. Add a hosted API URL in `public-config.js` to enable Conductor connection."
           : "Running in local preview mode. Connect to Conductor is unavailable until `python3 server.py` is running.",
       );
     }
@@ -1788,7 +1833,9 @@ async function boot() {
     setStatus(error.message, true);
     elements.datasetName.textContent = state.hostedPreviewMode ? "Bundled benchmark data" : "Connection needed";
     elements.datasetSummary.textContent = state.hostedPreviewMode
-      ? "The public site uses bundled benchmarks and manual planning inputs."
+      ? API_BASE_URL
+        ? `The public site expects a hosted API at ${API_BASE_URL}.`
+        : "The public site uses bundled benchmarks and manual planning inputs."
       : "Open with a local web server to use preview mode, or start `python3 server.py` for live Conductor data.";
   }
 }
