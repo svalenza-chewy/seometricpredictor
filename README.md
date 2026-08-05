@@ -41,6 +41,20 @@ If the Render service is created with the default Blueprint name `svalenza-seome
 
 `https://svalenza-seometricpredictor-api.onrender.com`
 
+### Railway backend option
+
+This repo also includes a `Dockerfile` so Railway can deploy the backend without guessing the runtime.
+
+Recommended Railway flow:
+
+1. Create a new Railway project.
+2. Add a service from the GitHub repo `svalenza-chewy/seometricpredictor`.
+3. Let Railway build from the included `Dockerfile`.
+4. Generate a public Railway domain for that service.
+5. Copy that backend URL into `public-config.js` as `apiBaseUrl`.
+
+Because the frontend already supports direct browser mode too, you can keep `directBrowserConductor: true` as a fallback, but the Railway backend is the more reliable Conductor path.
+
 ## Files included
 
 - `index.html`
