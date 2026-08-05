@@ -30,6 +30,23 @@ const KPI_LABELS = {
   IMPRESSIONS: "Impressions",
   "Click through rate": "Click Through Rate",
 };
+const REPORTING_API_BASE = "https://api.conductor.com";
+const DATA_API_BASE = "https://api-universal.conductor.com";
+const DEFAULT_SEARCH_ENGINE = "GOOGLE_en_US";
+const DEFAULT_DEVICE = "SMARTPHONE";
+const DEFAULT_LOCODE = "US";
+const CTR_CURVE = {
+  1: 0.285,
+  2: 0.157,
+  3: 0.11,
+  4: 0.08,
+  5: 0.061,
+  6: 0.047,
+  7: 0.036,
+  8: 0.028,
+  9: 0.022,
+  10: 0.018,
+};
 
 function normalizeApiBaseUrl(value) {
   const trimmed = String(value || "").trim();
@@ -49,6 +66,241 @@ function resolveApiBaseUrl() {
 }
 
 const API_BASE_URL = resolveApiBaseUrl();
+const DIRECT_BROWSER_CONDUCTOR = Boolean(window.SEOMETRIC_APP_CONFIG?.directBrowserConductor);
+
+class BrowserConductorClient {
+  constructor(apiKey, apiSecret) {
+    this.apiKey = apiKey;
+    this.apiSecret = apiSecret;
+  }
+
+  signature() {
+    return window.md5(`${this.apiKey}${this.apiSecret}${Math.floor(Date.now() / 1000)}`);
+  }
+
+  signedUrl(baseUrl, routePath) {
+    const url = new URL(`${baseUrl}${routePath}`);
+    url.searchParams.set("apiKey", this.apiKey);
+    url.searchParams.set("sig", this.signature());
+    return url.toString();
+  }
+
+  async requestJson(url, { method = "GET", body, dataApi = false } = {}) {
+    const headers = { Accept: "application/json" };
+    if (body) headers["Content-Type"] = "application/json";
+    if (dataApi) {
+      headers["x-api-key"] = this.apiKey;
+      headers["x-api-gateway-key"] = this.apiKey;
+    }
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch {
+      throw new Error(
+        "The browser could not reach Conductor directly. This is usually blocked by browser CORS or network policy.",
+      );
+    }
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(text || `Conductor request failed with ${response.status}.`);
+    }
+    return text ? JSON.parse(text) : null;
+  }
+
+  async reportingGet(routePath) {
+    const data = await this.requestJson(this.signedUrl(REPORTING_API_BASE, routePath));
+    if (!Array.isArray(data)) throw new Error("Expected Conductor Reporting API to return a list.");
+    return data.filter((item) => item && typeof item === "object");
+  }
+
+  async fetchReportingUrl(reportUrl) {
+    const url = new URL(reportUrl);
+    url.searchParams.set("apiKey", this.apiKey);
+    url.searchParams.set("sig", this.signature());
+    const data = await this.requestJson(url.toString());
+    if (!Array.isArray(data)) throw new Error("Expected Conductor report URL to return a list.");
+    return data.filter((item) => item && typeof item === "object");
+  }
+
+  async dataPost(routePath, body) {
+    const data = await this.requestJson(this.signedUrl(DATA_API_BASE, routePath), {
+      method: "POST",
+      body,
+      dataApi: true,
+    });
+    if (!data || typeof data !== "object") throw new Error("Expected Conductor Data API to return an object.");
+    return data;
+  }
+
+  listAccounts() {
+    return this.reportingGet("/v3/accounts");
+  }
+
+  listWebProperties(accountId) {
+    return this.reportingGet(`/v3/accounts/${accountId}/web-properties`);
+  }
+
+  listKeywordGroups(accountId) {
+    return this.reportingGet(`/v3/accounts/${accountId}/categories`);
+  }
+
+  listTrackedSearches(accountId, webPropertyId) {
+    return this.reportingGet(`/v3/accounts/${accountId}/web-properties/${webPropertyId}/tracked-searches`);
+  }
+
+  rowsFromDataApi(payload) {
+    const schema = Array.isArray(payload.schema) ? payload.schema : [];
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    const fieldNames = schema.map((field) => field?.name).filter(Boolean);
+    return results
+      .filter(Array.isArray)
+      .map((row) => Object.fromEntries(fieldNames.map((name, index) => [name, row[index]])));
+  }
+
+  parseRank(value, fallback = null) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? fallback : parsed;
+  }
+
+  async fetchCurrentShare(accountId, webPropertyId, keywordGroupId, keywordGroupName, currentDates) {
+    const requestBody = {
+      account_id: accountId,
+      start_date: currentDates.start_date,
+      end_date: currentDates.end_date,
+      collection_frequency: currentDates.collection_frequency,
+      web_property_ids: [Number(webPropertyId)],
+      search_engine_names: [DEFAULT_SEARCH_ENGINE],
+      devices: [DEFAULT_DEVICE],
+      locodes: [DEFAULT_LOCODE],
+      keyword_group_breakdown: true,
+      result_types: ["STANDARD_LINK"],
+      includeMsv: true,
+      limit: 5000,
+    };
+
+    if (/^\d+$/.test(String(keywordGroupId))) {
+      requestBody.keyword_group_ids = [Number(keywordGroupId)];
+    } else {
+      requestBody.keyword_group_names = [keywordGroupName];
+    }
+
+    let response;
+    try {
+      response = await this.dataPost("/data-api/v1/async/keyword_rankings", requestBody);
+    } catch (error) {
+      const message = String(error.message || error);
+      if (message.includes("Data API 2.0 entitlement")) {
+        return {
+          currentShare: null,
+          shareMessage:
+            "Current share is unavailable because this user does not have Data API 2.0 entitlement.",
+        };
+      }
+      return {
+        currentShare: null,
+        shareMessage: `Current share is unavailable: ${message}`,
+      };
+    }
+
+    const executionId = response.executionId;
+    while (response.executionState === "IN_PROGRESS") {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      response = await this.dataPost("/data-api/v1/async/keyword_rankings", { executionId });
+    }
+
+    let rows = this.rowsFromDataApi(response);
+    let nextPageId = response.nextPageId;
+    while (nextPageId) {
+      const page = await this.dataPost("/data-api/v1/async/keyword_rankings", { executionId, nextPageId });
+      rows = rows.concat(this.rowsFromDataApi(page));
+      nextPageId = page.nextPageId;
+    }
+
+    if (!rows.length) {
+      return {
+        currentShare: null,
+        shareMessage: "Current share is unavailable because the Data API returned no rows for this group.",
+      };
+    }
+
+    const byQuery = new Map();
+    for (const row of rows) {
+      const query = row.query;
+      if (!query) continue;
+      const rank = this.parseRank(row.rank_standard);
+      const existing = byQuery.get(query);
+      const existingRank = this.parseRank(existing?.rank_standard, 999);
+      if (!existing || (rank !== null && rank < existingRank)) {
+        byQuery.set(query, row);
+      }
+    }
+
+    let totalMonthlyVolume = 0;
+    let estimatedMonthlyClicks = 0;
+    for (const row of byQuery.values()) {
+      const volume = Number(row.average_search_volume || row.approximate_search_volume || 0);
+      const rank = this.parseRank(row.rank_standard);
+      totalMonthlyVolume += volume;
+      estimatedMonthlyClicks += volume * estimateCtr(rank);
+    }
+
+    if (totalMonthlyVolume === 0) {
+      return {
+        currentShare: 0,
+        shareMessage: "Current share is estimated from rank-based CTR modeling.",
+      };
+    }
+
+    return {
+      currentShare: Number(((estimatedMonthlyClicks / totalMonthlyVolume) * 100).toFixed(2)),
+      shareMessage: "Current share is estimated from rank-based CTR modeling.",
+    };
+  }
+}
+
+function estimateCtr(rank) {
+  if (rank == null) return 0;
+  if (CTR_CURVE[rank]) return CTR_CURVE[rank];
+  if (rank <= 20) return 0.01;
+  return 0;
+}
+
+function currentPeriodFromProperty(webProperty) {
+  const rankSourceInfo = Array.isArray(webProperty.rankSourceInfo) ? webProperty.rankSourceInfo : [];
+  for (const item of rankSourceInfo) {
+    const current = item?.reports?.CURRENT || {};
+    const startDate = String(current.startDate || "").slice(0, 10);
+    const endDate = String(current.endDate || "").slice(0, 10);
+    if (startDate && endDate) {
+      return { start_date: startDate, end_date: endDate, collection_frequency: "WEEKLY" };
+    }
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  return { start_date: today, end_date: today, collection_frequency: "WEEKLY" };
+}
+
+function currentSearchVolumeReport(webProperty) {
+  const rankSourceInfo = Array.isArray(webProperty.rankSourceInfo) ? webProperty.rankSourceInfo : [];
+  for (const item of rankSourceInfo) {
+    const reportUrl = item?.reports?.CURRENT?.webPropertySearchVolumeReport;
+    if (reportUrl) return reportUrl;
+  }
+  throw new Error("No search volume report URL was available for the selected web property.");
+}
+
+function sumRecentVolume(volumeRow) {
+  const volumeItems = Array.isArray(volumeRow?.volumeItems) ? volumeRow.volumeItems : [];
+  if (volumeItems.length) {
+    return volumeItems.slice(0, 12).reduce((sum, item) => sum + Number(item?.volume || 0), 0);
+  }
+  return Number(volumeRow?.averageVolume || 0) * 12;
+}
 
 function buildRoadmapQuarters(count = DEFAULT_ROADMAP_QUARTER_COUNT, startDate = new Date()) {
   return Array.from({ length: count }, (_, index) => {
@@ -160,6 +412,7 @@ const state = {
   error: "",
   previewMode: false,
   hostedPreviewMode: false,
+  browserConductorClient: null,
 };
 
 const elements = {
@@ -567,8 +820,16 @@ function canUseHostedApi() {
   return Boolean(state.hostedPreviewMode && API_BASE_URL);
 }
 
+function canUseDirectBrowserConductor() {
+  return Boolean(state.hostedPreviewMode && DIRECT_BROWSER_CONDUCTOR);
+}
+
+function canUseExternalConnection() {
+  return canUseHostedApi() || canUseDirectBrowserConductor();
+}
+
 function renderConnectionState() {
-  const connectionLocked = state.previewMode && !canUseHostedApi();
+  const connectionLocked = state.previewMode && !canUseExternalConnection();
   elements.connectButton.disabled = state.connecting || connectionLocked;
   elements.connectButton.textContent = state.connecting
     ? "Connecting..."
@@ -576,6 +837,8 @@ function renderConnectionState() {
       ? state.hostedPreviewMode
         ? "Public Benchmark Mode"
         : "Preview Mode Only"
+    : canUseDirectBrowserConductor() && !state.isConnected
+      ? "Connect Directly to Conductor"
     : state.isConnected
       ? "Reconnect to Conductor"
       : "Connect to Conductor";
@@ -593,7 +856,9 @@ function renderConnectionState() {
       ? "Bundled benchmark data"
       : "Connection needed";
     elements.datasetSummary.textContent = state.hostedPreviewMode
-      ? API_BASE_URL
+      ? canUseDirectBrowserConductor()
+        ? "This public version will try to connect directly from your browser using the credentials you enter."
+        : API_BASE_URL
         ? "Connect with your own Conductor API key and secret API key through the hosted backend."
         : "This public version uses built-in page-type benchmarks plus your manual inputs."
       : "Enter your Conductor API key and secret API key to load live accounts.";
@@ -992,6 +1257,18 @@ function renderForecast() {
 
 async function loadAccounts() {
   setStatus("Loading Conductor accounts...");
+  if (state.browserConductorClient) {
+    const accounts = await state.browserConductorClient.listAccounts();
+    const activeAccounts = accounts
+      .filter((account) => account.isActive)
+      .map((account) => ({ accountId: account.accountId, name: account.name }));
+    state.accounts = activeAccounts;
+    const preferredAccount =
+      activeAccounts.find((account) => account.name === "Chewy - Experiments") || activeAccounts[0];
+    state.selectedAccountId = preferredAccount?.accountId || "";
+    renderAccounts();
+    return;
+  }
   const payload = await fetchJson("/api/accounts");
   state.accounts = payload.accounts;
   const preferredAccount =
@@ -1001,12 +1278,14 @@ async function loadAccounts() {
 }
 
 async function connectToConductor() {
-  if (state.previewMode && !canUseHostedApi()) {
+  if (state.previewMode && !canUseExternalConnection()) {
     setStatus(
       state.hostedPreviewMode
-        ? API_BASE_URL
-          ? `The public site is configured for API access at ${API_BASE_URL}, but the benchmark fallback is still active.`
-          : "This public version runs in benchmark mode only until a hosted API backend is configured in `public-config.js`."
+        ? canUseDirectBrowserConductor()
+          ? "This public version is ready for direct browser connection."
+          : API_BASE_URL
+            ? `The public site is configured for API access at ${API_BASE_URL}, but the benchmark fallback is still active.`
+            : "This public version runs in benchmark mode only until a hosted API backend is configured in `public-config.js`."
         : "Preview mode is using bundled benchmark data. Live Conductor connection is unavailable on this preview server.",
     );
     return;
@@ -1021,9 +1300,16 @@ async function connectToConductor() {
   try {
     state.connecting = true;
     renderConnectionState();
-    setStatus("Connecting to Conductor...");
-    const payload = await postJson("/api/connect", { apiKey, apiSecret });
-    state.isConnected = Boolean(payload.connected);
+    setStatus(canUseDirectBrowserConductor() ? "Connecting directly to Conductor..." : "Connecting to Conductor...");
+    if (canUseDirectBrowserConductor() && !canUseHostedApi()) {
+      state.browserConductorClient = new BrowserConductorClient(apiKey, apiSecret);
+      await state.browserConductorClient.listAccounts();
+      state.isConnected = true;
+    } else {
+      const payload = await postJson("/api/connect", { apiKey, apiSecret });
+      state.isConnected = Boolean(payload.connected);
+      state.browserConductorClient = null;
+    }
     await loadAccounts();
     await loadWebProperties();
     await loadKeywordGroups();
@@ -1031,6 +1317,7 @@ async function connectToConductor() {
     setStatus("Live Conductor data loaded.");
   } catch (error) {
     state.isConnected = false;
+    state.browserConductorClient = null;
     state.accounts = [];
     state.webProperties = [];
     state.keywordGroups = [];
@@ -1060,8 +1347,10 @@ async function loadPageTypes() {
     state.hostedPreviewMode = !isLocalHost();
     setStatus(
       state.hostedPreviewMode
-        ? API_BASE_URL
-          ? `Could not load benchmark data from the hosted API at ${API_BASE_URL}. Falling back to bundled benchmark mode.`
+        ? DIRECT_BROWSER_CONDUCTOR
+          ? "Public direct-browser mode loaded with bundled benchmark data."
+          : API_BASE_URL
+            ? `Could not load benchmark data from the hosted API at ${API_BASE_URL}. Falling back to bundled benchmark mode.`
           : "Public benchmark mode loaded with bundled page-type data."
         : "Running in local preview mode with bundled benchmark data.",
     );
@@ -1084,6 +1373,22 @@ async function loadWebProperties() {
     return;
   }
   setStatus("Loading web properties...");
+  if (state.browserConductorClient) {
+    const webProperties = await state.browserConductorClient.listWebProperties(state.selectedAccountId);
+    const activeWebProperties = webProperties
+      .filter((webProperty) => webProperty.isActive)
+      .map((webProperty) => ({
+        webPropertyId: webProperty.webPropertyId,
+        name: webProperty.name,
+        currentPeriod: currentPeriodFromProperty(webProperty),
+      }));
+    state.webProperties = activeWebProperties;
+    const chewyProperty =
+      activeWebProperties.find((webProperty) => webProperty.name === "chewy.com") || activeWebProperties[0];
+    state.selectedWebPropertyId = chewyProperty?.webPropertyId || "";
+    renderWebProperties();
+    return;
+  }
   const payload = await fetchJson(`/api/accounts/${state.selectedAccountId}/web-properties`);
   state.webProperties = payload.webProperties;
   const chewyProperty =
@@ -1097,6 +1402,39 @@ async function loadKeywordGroups() {
     return;
   }
   setStatus("Loading keyword groups...");
+  if (state.browserConductorClient) {
+    const [groups, webProperties] = await Promise.all([
+      state.browserConductorClient.listKeywordGroups(state.selectedAccountId),
+      state.browserConductorClient.listWebProperties(state.selectedAccountId),
+    ]);
+    const activeTrackedSearchIds = new Set();
+    for (const webProperty of webProperties.filter((item) => item?.isActive)) {
+      const trackedSearches = await state.browserConductorClient.listTrackedSearches(
+        state.selectedAccountId,
+        webProperty.webPropertyId,
+      );
+      for (const trackedSearch of trackedSearches) {
+        if (trackedSearch?.isActive && trackedSearch?.trackedSearchId != null) {
+          activeTrackedSearchIds.add(String(trackedSearch.trackedSearchId));
+        }
+      }
+    }
+    state.keywordGroups = groups
+      .map((group) => ({
+        id: String(group.categoryId || group.keywordGroupId || group.id || group.name),
+        name: group.name || "Untitled group",
+        trackedSearchIds: Array.isArray(group.trackedSearchIds) ? group.trackedSearchIds : [],
+        keywordCount: Array.isArray(group.trackedSearchIds)
+          ? group.trackedSearchIds.filter((trackedSearchId) =>
+              activeTrackedSearchIds.has(String(trackedSearchId)),
+            ).length
+          : 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    state.selectedGroupId = state.keywordGroups[0]?.id || "";
+    renderKeywordGroups();
+    return;
+  }
   const payload = await fetchJson(`/api/accounts/${state.selectedAccountId}/keyword-groups`);
   state.keywordGroups = payload.keywordGroups;
   state.selectedGroupId = payload.keywordGroups[0]?.id || "";
@@ -1105,6 +1443,90 @@ async function loadKeywordGroups() {
 
 async function loadSummary() {
   if (!state.selectedAccountId || !state.selectedWebPropertyId || !state.selectedGroupId) {
+    return;
+  }
+
+  if (state.browserConductorClient) {
+    const [webProperties, groups, trackedSearches] = await Promise.all([
+      state.browserConductorClient.listWebProperties(state.selectedAccountId),
+      state.browserConductorClient.listKeywordGroups(state.selectedAccountId),
+      state.browserConductorClient.listTrackedSearches(state.selectedAccountId, state.selectedWebPropertyId),
+    ]);
+
+    const targetProperty = webProperties.find((webProperty) => String(webProperty.webPropertyId) === String(state.selectedWebPropertyId));
+    if (!targetProperty) {
+      throw new Error("The selected web property was not found in Conductor.");
+    }
+
+    const targetGroup = groups.find((group) => {
+      const id = String(group.categoryId || group.keywordGroupId || group.id || group.name);
+      return id === String(state.selectedGroupId);
+    });
+    if (!targetGroup) {
+      throw new Error("The selected keyword group was not found in Conductor.");
+    }
+
+    const searchVolumes = await state.browserConductorClient.fetchReportingUrl(currentSearchVolumeReport(targetProperty));
+    const trackedSearchMap = new Map(
+      trackedSearches
+        .filter((item) => item?.trackedSearchId != null)
+        .map((item) => [String(item.trackedSearchId), item]),
+    );
+    const volumeMap = new Map(
+      searchVolumes
+        .filter((item) => item?.trackedSearchId != null)
+        .map((item) => [String(item.trackedSearchId), item]),
+    );
+
+    let annualSearchVolume = 0;
+    let activeKeywordCount = 0;
+    const keywords = [];
+    for (const trackedSearchId of targetGroup.trackedSearchIds || []) {
+      const key = String(trackedSearchId);
+      const trackedSearch = trackedSearchMap.get(key);
+      const volumeRow = volumeMap.get(key) || {};
+      const annualVolume = sumRecentVolume(volumeRow);
+      annualSearchVolume += annualVolume;
+      if (trackedSearch?.isActive) {
+        activeKeywordCount += 1;
+      }
+      keywords.push({
+        trackedSearchId: key,
+        query: trackedSearch?.queryPhrase || "",
+        isActive: Boolean(trackedSearch?.isActive),
+        annualSearchVolume: annualVolume,
+        averageVolume: Number(volumeRow.averageVolume || 0),
+      });
+    }
+
+    const shareData = await state.browserConductorClient.fetchCurrentShare(
+      state.selectedAccountId,
+      state.selectedWebPropertyId,
+      state.selectedGroupId,
+      targetGroup.name || "",
+      currentPeriodFromProperty(targetProperty),
+    );
+
+    const estimatedCurrentTraffic =
+      shareData.currentShare == null ? 0 : Math.round(annualSearchVolume * (shareData.currentShare / 100));
+
+    state.summary = {
+      groupId: state.selectedGroupId,
+      groupName: targetGroup.name || "",
+      keywordCount: activeKeywordCount,
+      totalKeywordCount: Array.isArray(targetGroup.trackedSearchIds) ? targetGroup.trackedSearchIds.length : 0,
+      annualSearchVolume,
+      currentShare: shareData.currentShare,
+      currentShareAvailable: shareData.currentShare != null,
+      shareMessage: shareData.shareMessage,
+      estimatedCurrentTraffic,
+      keywords,
+    };
+    state.currentShareOverride = state.summary.currentShareAvailable ? state.summary.currentShare : state.currentShareOverride;
+    elements.datasetName.textContent = getSelectedAccount()?.name || "Conductor";
+    elements.datasetSummary.textContent = `${state.keywordGroups.length} live keyword groups`;
+    setStatus("Live Conductor data loaded.");
+    renderForecast();
     return;
   }
 
@@ -1816,8 +2238,10 @@ async function boot() {
       state.hostedPreviewMode = !isLocalHost();
       setStatus(
         state.hostedPreviewMode
-          ? API_BASE_URL
-            ? `The public site could not reach the hosted API at ${API_BASE_URL}. Benchmark mode is active instead.`
+          ? DIRECT_BROWSER_CONDUCTOR
+            ? "Public direct-browser mode is active. Enter your Conductor credentials to try a browser-direct connection."
+            : API_BASE_URL
+              ? `The public site could not reach the hosted API at ${API_BASE_URL}. Benchmark mode is active instead.`
             : "Public benchmark mode is active. Add a hosted API URL in `public-config.js` to enable Conductor connection."
           : "Running in local preview mode. Connect to Conductor is unavailable until `python3 server.py` is running.",
       );
@@ -1838,8 +2262,10 @@ async function boot() {
     setStatus(error.message, true);
     elements.datasetName.textContent = state.hostedPreviewMode ? "Bundled benchmark data" : "Connection needed";
     elements.datasetSummary.textContent = state.hostedPreviewMode
-      ? API_BASE_URL
-        ? `The public site expects a hosted API at ${API_BASE_URL}.`
+      ? DIRECT_BROWSER_CONDUCTOR
+        ? "The public site is using bundled benchmarks and can attempt direct browser connection to Conductor."
+        : API_BASE_URL
+          ? `The public site expects a hosted API at ${API_BASE_URL}.`
         : "The public site uses bundled benchmarks and manual planning inputs."
       : "Open with a local web server to use preview mode, or start `python3 server.py` for live Conductor data.";
   }
